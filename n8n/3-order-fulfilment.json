@@ -1,0 +1,356 @@
+{
+  "name": "Boutique \u2014 3. Order Fulfilment",
+  "nodes": [
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Orders",
+          "mode": "name"
+        },
+        "event": "rowAdded",
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bc2d3984-fdff-4952-b1b4-200d65e60da4",
+      "name": "New Order Trigger",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [
+        -680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Products",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "20ddcf3e-95b4-4097-9bae-d93d512cd279",
+      "name": "Read Products for Stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Given a new order, find the matching product row and compute the new stock.\n// Outputs the row number + new stock so the next node can update the sheet.\nconst order = $items('New Order Trigger')[0].json;\nconst products = $items('Read Products for Stock');\n\nlet match = null;\nlet rowNumber = null;\nproducts.forEach((it, i) => {\n  if (String(it.json.SKU).trim() === String(order.SKU).trim()) {\n    match = it.json;\n    // Google Sheets node exposes the spreadsheet row via row_number when read.\n    rowNumber = it.json.row_number || (i + 2); // +2: header row + 1-based\n  }\n});\n\nif (!match) {\n  return [{ json: { ok: false, reason: 'SKU not found', sku: order.SKU, order } }];\n}\n\nconst qty = Number(order.Qty) || 1;\nconst current = Number(match.Stock) || 0;\nconst newStock = Math.max(0, current - qty);\n\nreturn [{\n  json: {\n    ok: true,\n    sku: order.SKU,\n    rowNumber,\n    newStock,\n    lowStock: newStock <= 2,\n    order,\n    productName: match.Name,\n  },\n}];"
+      },
+      "id": "61b75c75-6b90-45c0-b868-9c1c0c111cce",
+      "name": "Compute New Stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ok1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "36cd3498-c52a-4e2d-a20c-65c09d5bdb6f",
+      "name": "Stock found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Products",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "SKU"
+          ],
+          "value": {
+            "SKU": "={{ $json.sku }}",
+            "Stock": "={{ $json.newStock }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "c1e9a155-55c4-47bc-b485-33137dce4cef",
+      "name": "Update Stock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Composes the owner notification (email body) for a new paid/new order.\nconst d = $json;\nconst o = d.order || {};\nconst subject = `\ud83d\udecd\ufe0f New order ${o.OrderID || ''} \u2014 ${d.productName || o.ProductName || ''}`;\nconst lines = [\n  `New order received:`,\n  ``,\n  `Order: ${o.OrderID || ''}`,\n  `Customer: ${o.CustomerName || ''} (${o.Phone || ''})`,\n  `Item: ${o.ProductName || d.productName} | Size ${o.Size || ''} | ${o.Colour || ''} | Qty ${o.Qty || 1}`,\n  `Total: ${o.Currency || 'ZAR'} ${o.TotalPrice || ''}`,\n  `Delivery: ${o.FulfilmentNotes || ''}`,\n  ``,\n  `Stock now: ${d.newStock}${d.lowStock ? '  \u26a0\ufe0f LOW STOCK' : ''}`,\n];\nreturn [{ json: { subject, body: lines.join('\\n'), to: $env.OWNER_EMAIL } }];"
+      },
+      "id": "8cd4ef35-7430-48f5-9d9d-f31f9d82cf1c",
+      "name": "Build Owner Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "6452c481-394d-4d96-bae7-24a1ff8915c8",
+      "name": "Email Owner",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        660,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WHATSAPP_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $('New Order Trigger').item.json.Phone.replace(/[^0-9]/g,''), type: 'text', text: { body: 'Thank you for your order ' + ($('New Order Trigger').item.json.OrderID || '') + '! \ud83c\udf89 We are preparing it and will share payment + delivery details shortly. \u2014 ' + ($env.BOUTIQUE_NAME || 'Our Boutique') } }) }}"
+      },
+      "id": "4151bfef-627e-4a72-9201-09c80fa2c2a7",
+      "name": "WhatsApp Confirm to Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Orders",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "OrderID"
+          ],
+          "value": {
+            "OrderID": "={{ $('New Order Trigger').item.json.OrderID }}",
+            "Status": "PROCESSING"
+          }
+        },
+        "options": {}
+      },
+      "id": "ac555c24-dbb7-4a8c-ab6c-f4141f105612",
+      "name": "Mark PROCESSING",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $env.OWNER_EMAIL }}",
+        "subject": "=\u26a0\ufe0f Order needs attention \u2014 SKU not found ({{ $json.sku }})",
+        "emailType": "text",
+        "message": "={{ 'An order came in but the SKU was not found in Products: ' + JSON.stringify($json.order) }}",
+        "options": {}
+      },
+      "id": "ad4fea4e-edb0-41ef-ac3a-c27c22d135e2",
+      "name": "Flag: SKU not found",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        220,
+        440
+      ]
+    }
+  ],
+  "connections": {
+    "New Order Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Products for Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Products for Stock": {
+      "main": [
+        [
+          {
+            "node": "Compute New Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute New Stock": {
+      "main": [
+        [
+          {
+            "node": "Stock found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stock found?": {
+      "main": [
+        [
+          {
+            "node": "Update Stock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag: SKU not found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Stock": {
+      "main": [
+        [
+          {
+            "node": "Build Owner Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Owner Email": {
+      "main": [
+        [
+          {
+            "node": "Email Owner",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WhatsApp Confirm to Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Confirm to Customer": {
+      "main": [
+        [
+          {
+            "node": "Mark PROCESSING",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "automated-boutique"
+  }
+}

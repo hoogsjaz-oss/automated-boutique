@@ -1,0 +1,6 @@
+SKU,Name,Description,Price,Currency,Sizes,Colours,Stock,ImageURL,PostDay,Active,Category,LastPostedAt
+BTQ-001,Floral Summer Dress,"Lightweight floral midi dress, perfect for summer.",450,ZAR,"S,M,L,XL","Red,Blue,Yellow",12,https://your-public-image-host.com/btq-001.jpg,Monday,TRUE,Dresses,
+BTQ-002,High-Waist Jeans,"Stretch high-waist denim, flattering fit.",620,ZAR,"28,30,32,34","Blue,Black",8,https://your-public-image-host.com/btq-002.jpg,Tuesday,TRUE,Bottoms,
+BTQ-003,Silk Scarf,"100% silk printed scarf, multiple uses.",180,ZAR,"One Size","Green,Pink,Cream",20,https://your-public-image-host.com/btq-003.jpg,Wednesday,TRUE,Accessories,
+BTQ-004,Linen Blazer,"Tailored linen blazer for smart-casual looks.",890,ZAR,"S,M,L","Beige,Navy",4,https://your-public-image-host.com/btq-004.jpg,Thursday,TRUE,Outerwear,
+BTQ-005,Strappy Heels,"Elegant strappy heels, 8cm.",540,ZAR,"3,4,5,6,7","Nude,Black",0,https://your-public-image-host.com/btq-005.jpg,Friday,TRUE,Shoes,

@@ -1,0 +1,13 @@
+# Never commit real secrets
+.env
+.env.local
+*.secret
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+node_modules/
+__pycache__/
+*.pyc

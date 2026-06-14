@@ -1,0 +1,371 @@
+{
+  "name": "Boutique \u2014 1. Weekly Scheduler & Poster",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c9e6d42a-4133-4961-9ada-b114fbec5d14",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Products",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "60d48eb2-4179-4539-96ee-9ad265f0b323",
+      "name": "Read Products",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reads all Products rows and keeps the ones scheduled to post today.\n// A product posts when: Active == TRUE and PostDay == today's weekday name.\n// Builds a ready-to-use caption for each kept product.\nconst weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long' })\n  .format(new Date());                                  // e.g. \"Monday\"\nconst boutique = $env.BOUTIQUE_NAME || 'Our Boutique';\n\nconst out = [];\nfor (const item of $input.all()) {\n  const p = item.json;\n  const active = String(p.Active).toUpperCase() === 'TRUE';\n  if (!active) continue;\n  if (String(p.PostDay).trim().toLowerCase() !== weekday.toLowerCase()) continue;\n\n  const stock = Number(p.Stock) || 0;\n  const price = `${p.Currency || 'R'}${p.Price}`;\n  const sizes = String(p.Sizes || '').split(',').map(s => s.trim()).filter(Boolean);\n  const colours = String(p.Colours || '').split(',').map(s => s.trim()).filter(Boolean);\n\n  const caption =\n    `\u2728 ${p.Name} \u2728\\n\\n` +\n    `${p.Description || ''}\\n\\n` +\n    `\ud83d\udcb0 Price: ${price}\\n` +\n    (sizes.length ? `\ud83d\udccf Sizes: ${sizes.join(', ')}\\n` : '') +\n    (colours.length ? `\ud83c\udfa8 Colours: ${colours.join(', ')}\\n` : '') +\n    (stock > 0 ? `\u2705 In stock` : `\u23f3 Restocking soon`) + `\\n\\n` +\n    `\ud83d\udcac WhatsApp us to order! \u2014 ${boutique}`;\n\n  out.push({\n    json: {\n      sku: p.SKU,\n      name: p.Name,\n      price,\n      sizes,\n      colours,\n      stock,\n      imageUrl: p.ImageURL,\n      caption,\n      postDay: p.PostDay,\n    },\n  });\n}\n\nif (out.length === 0) {\n  // Nothing scheduled today \u2014 stop the branch cleanly.\n  return [];\n}\nreturn out;"
+      },
+      "id": "ef48734d-144f-40be-96f7-af822d61a51b",
+      "name": "Filter & Build Captions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.FB_PAGE_ID }}/photos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.imageUrl, caption: $json.caption }) }}"
+      },
+      "id": "726fdcbc-1aa1-429d-b5d9-69c61d7fb7d3",
+      "name": "Facebook Page Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.IG_USER_ID }}/media",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ image_url: $json.imageUrl, caption: $json.caption }) }}"
+      },
+      "id": "f5a4b093-a034-4ccb-83a8-e6c7664b27e6",
+      "name": "Instagram Create Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Instagram publishing is two calls: create a media container, then publish it.\n// This node just passes the creation_id from the previous (container) node\n// through together with the IG user id so the Publish node can use it.\nreturn $input.all().map(i => ({\n  json: { creation_id: i.json.id }\n}));"
+      },
+      "id": "af1de3d8-8cb4-40e6-8975-1c462b09359d",
+      "name": "Pass creation_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.IG_USER_ID }}/media_publish",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ creation_id: $json.creation_id }) }}"
+      },
+      "id": "e6077d76-bf06-420b-9db4-49b60e2eecc7",
+      "name": "Instagram Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.tiktokapis.com/v2/post/publish/content/init/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.TIKTOK_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=UTF-8"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ post_info: { title: $json.name, description: $json.caption, disable_comment: false, privacy_level: 'PUBLIC_TO_EVERYONE' }, source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: [$json.imageUrl] }, post_mode: 'DIRECT_POST', media_type: 'PHOTO' }) }}"
+      },
+      "id": "3f2d8156-81a0-4f18-9f0f-d29ae560aac1",
+      "name": "TikTok Init Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Subscribers",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "239526e3-9af4-4f60-bd32-7ba16ec723e7",
+      "name": "Read Subscribers",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        40,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cross-joins today's products with opted-in subscribers so each subscriber\n// receives each scheduled product as a WhatsApp image message.\n// WhatsApp policy: only message users who have opted in. For marketing\n// outside the 24h window you should use an approved message template.\nconst products = $items('Filter & Build Captions').map(i => i.json);\nconst subs = $items('Read Subscribers')\n  .map(i => i.json)\n  .filter(s => String(s.OptInStatus).toUpperCase() === 'OPTED_IN');\n\nconst out = [];\nfor (const s of subs) {\n  for (const p of products) {\n    out.push({\n      json: {\n        to: String(s.Phone).replace(/[^0-9]/g, ''),\n        name: s.Name,\n        imageUrl: p.imageUrl,\n        caption: p.caption,\n        sku: p.sku,\n      },\n    });\n  }\n}\nreturn out;"
+      },
+      "id": "9b04b24e-9d96-4bd9-a593-21335fd49922",
+      "name": "Build WhatsApp Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WHATSAPP_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.to, type: 'image', image: { link: $json.imageUrl, caption: $json.caption } }) }}"
+      },
+      "id": "d39232eb-d15c-4a11-bb25-ce95de11a1be",
+      "name": "WhatsApp Send Broadcast",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        640
+      ]
+    }
+  ],
+  "connections": {
+    "Weekly Schedule": {
+      "main": [
+        [
+          {
+            "node": "Read Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Products": {
+      "main": [
+        [
+          {
+            "node": "Filter & Build Captions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Build Captions": {
+      "main": [
+        [
+          {
+            "node": "Facebook Page Post",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Instagram Create Container",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "TikTok Init Post",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Subscribers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Instagram Create Container": {
+      "main": [
+        [
+          {
+            "node": "Pass creation_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass creation_id": {
+      "main": [
+        [
+          {
+            "node": "Instagram Publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Subscribers": {
+      "main": [
+        [
+          {
+            "node": "Build WhatsApp Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build WhatsApp Messages": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp Send Broadcast",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "automated-boutique"
+  }
+}

@@ -1,0 +1,356 @@
+{
+  "name": "Boutique \u2014 2. Customer Reply Bot (Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inbound",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0604373e-c00d-4d98-b14d-70a9a90968db",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        300
+      ],
+      "webhookId": "whatsapp-inbound"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parses an incoming WhatsApp Cloud API webhook payload into a simple shape.\n// Ignores status callbacks (delivery/read receipts) which have no message.\nconst body = $input.first().json.body || $input.first().json;\nlet entry, change, value, msg;\ntry {\n  entry = body.entry[0];\n  change = entry.changes[0];\n  value = change.value;\n  msg = value.messages && value.messages[0];\n} catch (e) { msg = null; }\n\nif (!msg || msg.type !== 'text') {\n  // Not a text message we can answer \u2014 end quietly.\n  return [];\n}\n\nconst contactName = (value.contacts && value.contacts[0] &&\n  value.contacts[0].profile && value.contacts[0].profile.name) || '';\n\nreturn [{\n  json: {\n    from: msg.from,                 // customer phone (wa id)\n    text: msg.text.body,            // the question\n    customerName: contactName,\n    messageId: msg.id,\n  },\n}];"
+      },
+      "id": "1dd3cd3d-c7c0-458e-b45d-2635bef3cb1a",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Products",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "107879db-3ced-4771-8fd0-7ee7fbe47db4",
+      "name": "Read Catalog",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the Anthropic request: turns the live catalog into JSON, injects it\n// into the system prompt, and passes the customer's question as the user turn.\nconst products = $items('Read Catalog').map(i => {\n  const p = i.json;\n  return {\n    sku: p.SKU,\n    name: p.Name,\n    description: p.Description,\n    price: Number(p.Price),\n    currency: p.Currency,\n    sizes: String(p.Sizes || '').split(',').map(s => s.trim()).filter(Boolean),\n    colours: String(p.Colours || '').split(',').map(s => s.trim()).filter(Boolean),\n    stock: Number(p.Stock) || 0,\n    category: p.Category,\n  };\n}).filter(p => String(p.sku || '').length > 0);\n\nconst incoming = $items('Parse Message')[0].json;\nconst boutique = $env.BOUTIQUE_NAME || 'Our Boutique';\n\nconst systemPrompt =\n`You are the friendly, professional sales assistant for ${boutique}, an online fashion boutique replying to customers on WhatsApp.\n\nAnswer using ONLY the live catalog (JSON) below. Customers ask about price, sizes, colours, and whether items are in stock, and may want to order.\n\nLIVE CATALOG:\n${JSON.stringify(products)}\n\nRULES:\n1. Use only the catalog data. Never invent products, prices, sizes, colours or stock.\n2. If stock is 0, say it's sold out and offer a similar in-stock item.\n3. Quote prices with currency (e.g. \"R450\").\n4. Keep replies short and warm for WhatsApp. Use the customer's name if known${incoming.customerName ? ' (' + incoming.customerName + ')' : ''}.\n5. To place an order you need: product, size, colour, quantity, customer name and delivery area. Confirm the total before finalising.\n6. When ALL order details are gathered AND the customer confirms, append a final line on its own:\n[[ORDER]] {\"sku\":\"...\",\"name\":\"...\",\"size\":\"...\",\"colour\":\"...\",\"qty\":1,\"customer_name\":\"...\",\"delivery_area\":\"...\",\"unit_price\":000,\"total_price\":000}\nOnly emit [[ORDER]] after confirmation; otherwise omit it.`;\n\nreturn [{\n  json: {\n    model: $env.CLAUDE_MODEL || 'claude-sonnet-4-6',\n    system: systemPrompt,\n    userText: incoming.text,\n    from: incoming.from,\n    customerName: incoming.customerName,\n  },\n}];"
+      },
+      "id": "b8fa1041-2eb1-4d72-9fd1-39e04c5f5352",
+      "name": "Build Claude Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -60,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: 1024, system: $json.system, messages: [{ role: 'user', content: $json.userText }] }) }}"
+      },
+      "id": "53a64c2c-283a-441b-a647-b13187160355",
+      "name": "Claude \u2014 Generate Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extracts Claude's text, splits off any [[ORDER]] machine line, and prepares\n// the WhatsApp reply + an optional order record for the fulfilment step.\nconst resp = $input.first().json;\nlet fullText = '';\ntry { fullText = resp.content.map(c => c.text || '').join('').trim(); } catch (e) { fullText = ''; }\nif (!fullText) fullText = \"Thanks for your message! A team member will get back to you shortly. \ud83d\udcac\";\n\nconst meta = $items('Build Claude Request')[0].json;\n\nlet reply = fullText;\nlet order = null;\nconst idx = fullText.indexOf('[[ORDER]]');\nif (idx !== -1) {\n  reply = fullText.slice(0, idx).trim();\n  const jsonPart = fullText.slice(idx + '[[ORDER]]'.length).trim();\n  try { order = JSON.parse(jsonPart); } catch (e) { order = null; }\n}\n\nreturn [{\n  json: {\n    to: meta.from,\n    reply: reply || \"Got it! \ud83d\udcac\",\n    hasOrder: !!order,\n    order: order || {},\n    customerPhone: meta.from,\n    customerName: meta.customerName,\n  },\n}];"
+      },
+      "id": "0889f51f-1e9a-4b0e-b33d-c8f4b1634523",
+      "name": "Handle Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        380,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WHATSAPP_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.to, type: 'text', text: { body: $json.reply } }) }}"
+      },
+      "id": "d8e2b4a1-d67d-4221-b5de-4822252af188",
+      "name": "Send WhatsApp Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "EVENT_RECEIVED",
+        "options": {}
+      },
+      "id": "a1da927b-c8a6-4eb0-ba3f-f26e813999d6",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        820,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ord1",
+              "leftValue": "={{ $json.hasOrder }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "b9964c77-911b-4e16-a187-f1211562af18",
+      "name": "Order detected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        600,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shapes a confirmed order from the bot into an Orders-sheet row.\nconst o = $json.order || {};\nconst phone = $json.customerPhone;\nconst id = 'ORD-' + Date.now();\nreturn [{\n  json: {\n    OrderID: id,\n    Timestamp: new Date().toISOString(),\n    CustomerName: o.customer_name || $json.customerName || '',\n    Phone: phone,\n    SKU: o.sku || '',\n    ProductName: o.name || '',\n    Size: o.size || '',\n    Colour: o.colour || '',\n    Qty: o.qty || 1,\n    UnitPrice: o.unit_price || '',\n    TotalPrice: o.total_price || '',\n    Currency: 'ZAR',\n    Status: 'NEW',\n    FulfilmentNotes: 'Delivery area: ' + (o.delivery_area || ''),\n    PaymentStatus: 'UNPAID',\n  },\n}];"
+      },
+      "id": "6b5f41bb-f41a-4158-a4dd-75a033ddecf9",
+      "name": "Shape Order Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GSHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Orders",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "id": "d332fc39-9106-483f-9098-8326b390fabc",
+      "name": "Append Order to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1040,
+        440
+      ]
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Read Catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Catalog": {
+      "main": [
+        [
+          {
+            "node": "Build Claude Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Claude Request": {
+      "main": [
+        [
+          {
+            "node": "Claude \u2014 Generate Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude \u2014 Generate Reply": {
+      "main": [
+        [
+          {
+            "node": "Handle Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Reply": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Order detected?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Reply": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order detected?": {
+      "main": [
+        [
+          {
+            "node": "Shape Order Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Shape Order Row": {
+      "main": [
+        [
+          {
+            "node": "Append Order to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "automated-boutique"
+  }
+}
