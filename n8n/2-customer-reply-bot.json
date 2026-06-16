@@ -196,7 +196,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Shapes a confirmed order from the bot into an Orders-sheet row.\nconst o = $json.order || {};\nconst phone = $json.customerPhone;\nconst id = 'ORD-' + Date.now();\nreturn [{\n  json: {\n    OrderID: id,\n    Timestamp: new Date().toISOString(),\n    CustomerName: o.customer_name || $json.customerName || '',\n    Phone: phone,\n    SKU: o.sku || '',\n    ProductName: o.name || '',\n    Size: o.size || '',\n    Colour: o.colour || '',\n    Qty: o.qty || 1,\n    UnitPrice: o.unit_price || '',\n    TotalPrice: o.total_price || '',\n    Currency: 'ZAR',\n    Status: 'NEW',\n    FulfilmentNotes: 'Delivery area: ' + (o.delivery_area || ''),\n    PaymentStatus: 'UNPAID',\n    PaymentLink: '',\n  },\n}];"
+        "jsCode": "// Shapes a confirmed order from the bot into an Orders-sheet row.\nconst o = $json.order || {};\nconst phone = $json.customerPhone;\nconst id = 'ORD-' + Date.now();\nreturn [{\n  json: {\n    OrderID: id,\n    Timestamp: new Date().toISOString(),\n    CustomerName: o.customer_name || $json.customerName || '',\n    Phone: phone,\n    SKU: o.sku || '',\n    ProductName: o.name || '',\n    Size: o.size || '',\n    Colour: o.colour || '',\n    Qty: o.qty || 1,\n    UnitPrice: o.unit_price || '',\n    TotalPrice: o.total_price || '',\n    Currency: $env.DEFAULT_CURRENCY || 'KES',\n    Status: 'NEW',\n    FulfilmentNotes: 'Delivery area: ' + (o.delivery_area || ''),\n    PaymentStatus: 'UNPAID',\n    PaymentRef: '',\n  },\n}];"
       },
       "id": "6b5f41bb-f41a-4158-a4dd-75a033ddecf9",
       "name": "Shape Order Row",

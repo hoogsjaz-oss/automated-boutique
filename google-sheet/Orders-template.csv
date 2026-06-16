@@ -1,2 +1,2 @@
-OrderID,Timestamp,CustomerName,Phone,SKU,ProductName,Size,Colour,Qty,UnitPrice,TotalPrice,Currency,Status,FulfilmentNotes,PaymentStatus,PaymentLink
-ORD-1001,2026-06-09T10:15:00Z,Thandi M,+27821234567,BTQ-001,Floral Summer Dress,M,Blue,1,450,450,ZAR,NEW,,UNPAID,
+OrderID,Timestamp,CustomerName,Phone,SKU,ProductName,Size,Colour,Qty,UnitPrice,TotalPrice,Currency,Status,FulfilmentNotes,PaymentStatus,PaymentRef
+ORD-1001,2026-06-09T10:15:00Z,Thandi M,+254712345678,BTQ-001,Floral Summer Dress,M,Blue,1,450,450,KES,NEW,,UNPAID,

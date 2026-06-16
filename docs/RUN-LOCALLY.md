@@ -2,7 +2,7 @@
 
 This runs the whole automation engine (**n8n** + the 3 workflows) on your own
 machine with Docker. The workflows talk to external services (Google Sheets,
-Claude, WhatsApp, Meta, TikTok, Yoco), so those still need keys — but you can get
+Claude, WhatsApp, Meta, TikTok, M-Pesa/Airtel), so those still need keys — but you can get
 n8n up and the AI reply logic working with just **two** keys to start.
 
 ---
@@ -31,7 +31,7 @@ posts on schedule, replies to WhatsApp messages, and fulfils orders.
   [01-google-sheet-setup.md](01-google-sheet-setup.md)) and its `GSHEET_ID`.
 - An **Anthropic API key** (for the reply bot) — see
   [05-claude-api-setup.md](05-claude-api-setup.md).
-- (Optional, add later) WhatsApp / Meta / TikTok / Yoco keys for live posting,
+- (Optional, add later) WhatsApp / Meta / TikTok / M-Pesa/Airtel keys for live posting,
   messaging and payments.
 
 ---
@@ -86,7 +86,7 @@ UI: **Workflows → Import from File →** select each file in `n8n/`.
    node. (See [01-google-sheet-setup.md](01-google-sheet-setup.md).)
 3. **Email credential** (workflow 3): add a Gmail OAuth2 or SMTP credential on
    the email nodes — or delete those nodes if you don't want owner emails yet.
-4. The HTTP nodes (WhatsApp / Meta / TikTok / Claude / Yoco) read from `.env`, so
+4. The HTTP nodes (WhatsApp / Meta / TikTok / Claude / M-Pesa/Airtel) read from `.env`, so
    no credential UI is needed — just make sure the env vars are set.
 5. Toggle each workflow **Active** (top-right) when you're ready.
 

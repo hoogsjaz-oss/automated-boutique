@@ -54,7 +54,7 @@ In n8n you'll add a **Google Sheets credential** (OAuth2 is simplest):
 |--------|---------|
 | `SKU` | Unique product code (e.g. `BTQ-001`). Used to match orders → stock. |
 | `Name`, `Description` | Shown in posts and replies. |
-| `Price`, `Currency` | Number + currency code (e.g. `450`, `ZAR`). |
+| `Price`, `Currency` | Number + currency code (e.g. `450`, `KES`). |
 | `Sizes`, `Colours` | Comma-separated (e.g. `S,M,L`). |
 | `Stock` | Units available. Hits 0 → bot says sold out; fulfilment won't go negative. |
 | `ImageURL` | **Public** image link used for posting. |

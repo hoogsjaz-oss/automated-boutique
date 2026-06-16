@@ -380,11 +380,11 @@ return [{
     Qty: o.qty || 1,
     UnitPrice: o.unit_price || '',
     TotalPrice: o.total_price || '',
-    Currency: 'ZAR',
+    Currency: $env.DEFAULT_CURRENCY || 'KES',
     Status: 'NEW',
     FulfilmentNotes: 'Delivery area: ' + (o.delivery_area || ''),
     PaymentStatus: 'UNPAID',
-    PaymentLink: '',
+    PaymentRef: '',
   },
 }];
 """.strip()
@@ -502,13 +502,72 @@ return [{
 }];
 """.strip()
 
+prepare_payment_js = r"""
+// Decides how the customer pays based on PAYMENT_METHOD (mpesa | airtel | bank),
+// formats the phone number for each provider, computes the amount, and builds:
+//  - the customer-facing WhatsApp message (confirmMessage)
+//  - the values M-Pesa Daraja needs (timestamp + base64 password + basic auth).
+// This node ALWAYS runs (before the payment Switch) so every downstream node can
+// safely read its output via $('Prepare Payment'), regardless of which branch ran.
+const o = $('New Order Trigger').item.json;
+const method = String($env.PAYMENT_METHOD || 'bank').toLowerCase();
+const boutique = $env.BOUTIQUE_NAME || 'Our Boutique';
+const currency = o.Currency || $env.DEFAULT_CURRENCY || 'KES';
+const amount = Math.round(Number(o.TotalPrice) || 0);
+const orderId = o.OrderID || ('ORD-' + Date.now());
+
+// Customer phone, digits only.
+const digits = String(o.Phone || '').replace(/[^0-9]/g, '');
+
+// --- M-Pesa (Safaricom Daraja) values ---
+const pad = n => String(n).padStart(2, '0');
+const t = new Date();
+const mpesaTimestamp = `${t.getFullYear()}${pad(t.getMonth()+1)}${pad(t.getDate())}${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}`;
+const shortcode = $env.MPESA_SHORTCODE || '';
+const passkey = $env.MPESA_PASSKEY || '';
+const mpesaPassword = Buffer.from(shortcode + passkey + mpesaTimestamp).toString('base64');
+const mpesaBasicAuth = Buffer.from((($env.MPESA_CONSUMER_KEY || '') + ':' + ($env.MPESA_CONSUMER_SECRET || ''))).toString('base64');
+// Daraja wants 2547XXXXXXXX / 2541XXXXXXXX.
+let mpesaPhone = digits;
+if (mpesaPhone.startsWith('0')) mpesaPhone = '254' + mpesaPhone.slice(1);
+else if (mpesaPhone.startsWith('7') || mpesaPhone.startsWith('1')) mpesaPhone = '254' + mpesaPhone;
+
+// --- Airtel Money msisdn (local, no country code) ---
+const cc = String($env.AIRTEL_COUNTRY_CODE || '254');
+let airtelMsisdn = digits;
+if (airtelMsisdn.startsWith(cc)) airtelMsisdn = airtelMsisdn.slice(cc.length);
+if (airtelMsisdn.startsWith('0')) airtelMsisdn = airtelMsisdn.slice(1);
+
+let confirmMessage;
+if (method === 'mpesa') {
+  confirmMessage = `Thank you for order ${orderId}! 🎉\nTotal: ${currency} ${amount}.\n\n` +
+    `📲 We've sent an M-Pesa payment request to your phone — please enter your M-Pesa PIN to pay. — ${boutique}`;
+} else if (method === 'airtel') {
+  confirmMessage = `Thank you for order ${orderId}! 🎉\nTotal: ${currency} ${amount}.\n\n` +
+    `📲 Approve the Airtel Money prompt on your phone to complete payment. — ${boutique}`;
+} else {
+  const bank = $env.BANK_DETAILS || '(bank details not configured — set BANK_DETAILS)';
+  confirmMessage = `Thank you for order ${orderId}! 🎉\nTotal: ${currency} ${amount}.\n\n` +
+    `🏦 Please pay by bank transfer:\n${bank}\n\nUse reference: ${orderId}.\n` +
+    `Then reply here with your proof of payment and we'll ship right away. — ${boutique}`;
+}
+
+return [{ json: {
+  method, currency, amount, orderId,
+  paymentStatus: 'PENDING', paymentRef: orderId,
+  confirmMessage,
+  mpesaTimestamp, mpesaPassword, mpesaBasicAuth, mpesaPhone,
+  airtelMsisdn,
+} }];
+""".strip()
+
 owner_notice_js = r"""
-// Composes the owner notification (email body) for a new order, including the
-// payment link. Reads the computed stock + the order row + the Yoco link via
-// direct node references so it doesn't depend on which node feeds it.
+// Composes the owner notification (email body) for a new order. Reads the
+// computed stock, the order row, and the chosen payment details via direct node
+// references so it doesn't depend on which payment branch ran.
 const d = $('Compute New Stock').item.json;
 const o = $('New Order Trigger').item.json;
-const link = ($('Create Payment Link').item.json || {}).redirectUrl || '';
+const p = $('Prepare Payment').item.json || {};
 const subject = `🛍️ New order ${o.OrderID || ''} — ${o.ProductName || d.productName || ''}`;
 const lines = [
   `New order received:`,
@@ -516,13 +575,13 @@ const lines = [
   `Order: ${o.OrderID || ''}`,
   `Customer: ${o.CustomerName || ''} (${o.Phone || ''})`,
   `Item: ${o.ProductName || d.productName} | Size ${o.Size || ''} | ${o.Colour || ''} | Qty ${o.Qty || 1}`,
-  `Total: ${o.Currency || 'ZAR'} ${o.TotalPrice || ''}`,
+  `Total: ${p.currency || o.Currency || ''} ${p.amount || o.TotalPrice || ''}`,
   `Delivery: ${o.FulfilmentNotes || ''}`,
-  `Payment link: ${link || '(not generated)'}`,
+  `Payment: ${p.method || '?'} — status ${p.paymentStatus || 'PENDING'} (ref ${p.paymentRef || o.OrderID})`,
   ``,
   `Stock now: ${d.newStock}${d.lowStock ? '  ⚠️ LOW STOCK' : ''}`,
 ];
-return [{ json: { subject, body: lines.join('\n'), to: $env.OWNER_EMAIL, paymentLink: link } }];
+return [{ json: { subject, body: lines.join('\n'), to: $env.OWNER_EMAIL } }];
 """.strip()
 
 w3_nodes = [
@@ -556,48 +615,93 @@ w3_nodes = [
                        "value": {"SKU": "={{ $json.sku }}", "Stock": "={{ $json.newStock }}"}},
           "options": {}}),
 
-    # ---- Create a hosted payment link (Yoco Checkout API, ZAR) ----
-    # Swap this single node for Stripe/PayFast if you prefer (see docs/07).
-    http("7d01cf13-a73c-4529-8b11-78ea0577227f", "Create Payment Link", [440, 200],
-         "POST", "https://payments.yoco.com/api/checkouts",
-         [("Authorization", "=Bearer {{ $env.YOCO_SECRET_KEY }}"),
+    # ---- Decide payment method, then branch ----
+    code("7d01cf13-a73c-4529-8b11-78ea0577227f", "Prepare Payment", [440, 200], prepare_payment_js),
+
+    node("def3166a-cc03-47e5-8999-1ff1dd254a9b", "Payment Method?",
+         "n8n-nodes-base.switch", 3.2, [660, 200],
+         {"rules": {"values": [
+             {"conditions": {"options": {"caseSensitive": False, "leftValue": "", "typeValidation": "loose"},
+                              "combinator": "and",
+                              "conditions": [{"leftValue": "={{ $env.PAYMENT_METHOD }}",
+                                              "rightValue": "mpesa",
+                                              "operator": {"type": "string", "operation": "equals"}}]},
+              "renameOutput": True, "outputKey": "M-Pesa"},
+             {"conditions": {"options": {"caseSensitive": False, "leftValue": "", "typeValidation": "loose"},
+                              "combinator": "and",
+                              "conditions": [{"leftValue": "={{ $env.PAYMENT_METHOD }}",
+                                              "rightValue": "airtel",
+                                              "operator": {"type": "string", "operation": "equals"}}]},
+              "renameOutput": True, "outputKey": "Airtel"},
+         ]},
+          "options": {"fallbackOutput": "extra"}}),
+
+    # ---- M-Pesa STK Push (Safaricom Daraja): get token, then prompt the phone ----
+    http("f527927d-9fce-40d2-b5dc-afb6afa2808d", "M-Pesa Get Token", [880, 40],
+         "GET", "=https://{{ $env.MPESA_ENV === 'production' ? 'api.safaricom.co.ke' : 'sandbox.safaricom.co.ke' }}/oauth/v1/generate?grant_type=client_credentials",
+         [("Authorization", "=Basic {{ $('Prepare Payment').item.json.mpesaBasicAuth }}")]),
+    http("7c78514b-c455-45a1-a695-7935a57aedd8", "M-Pesa STK Push", [1100, 40],
+         "POST", "=https://{{ $env.MPESA_ENV === 'production' ? 'api.safaricom.co.ke' : 'sandbox.safaricom.co.ke' }}/mpesa/stkpush/v1/processrequest",
+         [("Authorization", "=Bearer {{ $json.access_token }}"),
           ("Content-Type", "application/json")],
          json_body="={{ JSON.stringify({"
-                   " amount: Math.round((Number($('New Order Trigger').item.json.TotalPrice) || 0) * 100),"
-                   " currency: ($('New Order Trigger').item.json.Currency || 'ZAR'),"
-                   " metadata: { orderId: ($('New Order Trigger').item.json.OrderID || ''),"
-                   " sku: ($('New Order Trigger').item.json.SKU || '') } }) }}"),
+                   " BusinessShortCode: $env.MPESA_SHORTCODE,"
+                   " Password: $('Prepare Payment').item.json.mpesaPassword,"
+                   " Timestamp: $('Prepare Payment').item.json.mpesaTimestamp,"
+                   " TransactionType: ($env.MPESA_TX_TYPE || 'CustomerPayBillOnline'),"
+                   " Amount: $('Prepare Payment').item.json.amount,"
+                   " PartyA: $('Prepare Payment').item.json.mpesaPhone,"
+                   " PartyB: $env.MPESA_SHORTCODE,"
+                   " PhoneNumber: $('Prepare Payment').item.json.mpesaPhone,"
+                   " CallBackURL: $env.MPESA_CALLBACK_URL,"
+                   " AccountReference: $('Prepare Payment').item.json.orderId,"
+                   " TransactionDesc: 'Payment for ' + $('Prepare Payment').item.json.orderId }) }}"),
 
-    code("8cd4ef35-7430-48f5-9d9d-f31f9d82cf1c", "Build Owner Email", [660, 200], owner_notice_js),
+    # ---- Airtel Money collection: get token, then request payment ----
+    http("68ad9819-8327-4309-8517-c78cc65ccda2", "Airtel Get Token", [880, 200],
+         "POST", "=https://{{ $env.AIRTEL_ENV === 'production' ? 'openapi.airtel.africa' : 'openapiuat.airtel.africa' }}/auth/oauth2/token",
+         [("Content-Type", "application/json"), ("Accept", "application/json")],
+         json_body="={{ JSON.stringify({ client_id: $env.AIRTEL_CLIENT_ID,"
+                   " client_secret: $env.AIRTEL_CLIENT_SECRET, grant_type: 'client_credentials' }) }}"),
+    http("8560440a-33a7-4aaf-91c2-3357d9382149", "Airtel Request Payment", [1100, 200],
+         "POST", "=https://{{ $env.AIRTEL_ENV === 'production' ? 'openapi.airtel.africa' : 'openapiuat.airtel.africa' }}/merchant/v1/payments/",
+         [("Authorization", "=Bearer {{ $json.access_token }}"),
+          ("X-Country", "={{ $env.AIRTEL_COUNTRY }}"),
+          ("X-Currency", "={{ $env.AIRTEL_CURRENCY }}"),
+          ("Content-Type", "application/json"), ("Accept", "application/json")],
+         json_body="={{ JSON.stringify({"
+                   " reference: $('Prepare Payment').item.json.orderId,"
+                   " subscriber: { country: $env.AIRTEL_COUNTRY, currency: $env.AIRTEL_CURRENCY,"
+                   " msisdn: $('Prepare Payment').item.json.airtelMsisdn },"
+                   " transaction: { amount: $('Prepare Payment').item.json.amount,"
+                   " country: $env.AIRTEL_COUNTRY, currency: $env.AIRTEL_CURRENCY,"
+                   " id: $('Prepare Payment').item.json.orderId } }) }}"),
 
-    node("6452c481-394d-4d96-bae7-24a1ff8915c8", "Email Owner",
-         "n8n-nodes-base.gmail", 2.1, [880, 120],
-         {"resource": "message", "operation": "send",
-          "sendTo": "={{ $json.to }}", "subject": "={{ $json.subject }}",
-          "emailType": "text", "message": "={{ $json.body }}", "options": {}}),
-
-    http("4151bfef-627e-4a72-9201-09c80fa2c2a7", "WhatsApp Confirm to Customer", [880, 300],
+    http("4151bfef-627e-4a72-9201-09c80fa2c2a7", "WhatsApp Confirm to Customer", [1340, 200],
          "POST", "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
          [("Authorization", "=Bearer {{ $env.WHATSAPP_TOKEN }}"),
           ("Content-Type", "application/json")],
          json_body="={{ JSON.stringify({ messaging_product: 'whatsapp',"
                    " to: $('New Order Trigger').item.json.Phone.replace(/[^0-9]/g,''),"
-                   " type: 'text', text: { body: 'Thank you for your order ' +"
-                   " ($('New Order Trigger').item.json.OrderID || '') + '! 🎉 Total: ' +"
-                   " ($('New Order Trigger').item.json.Currency || 'ZAR') + ' ' +"
-                   " ($('New Order Trigger').item.json.TotalPrice || '') +"
-                   " '. Pay securely here: ' + (($('Create Payment Link').item.json || {}).redirectUrl || '') +"
-                   " ' — ' + ($env.BOUTIQUE_NAME || 'Our Boutique') } }) }}"),
+                   " type: 'text', text: { body: $('Prepare Payment').item.json.confirmMessage } }) }}"),
 
-    node("ac555c24-dbb7-4a8c-ab6c-f4141f105612", "Mark PROCESSING", "n8n-nodes-base.googleSheets", 4.5, [1100, 300],
+    code("8cd4ef35-7430-48f5-9d9d-f31f9d82cf1c", "Build Owner Email", [1560, 200], owner_notice_js),
+
+    node("6452c481-394d-4d96-bae7-24a1ff8915c8", "Email Owner",
+         "n8n-nodes-base.gmail", 2.1, [1780, 120],
+         {"resource": "message", "operation": "send",
+          "sendTo": "={{ $json.to }}", "subject": "={{ $json.subject }}",
+          "emailType": "text", "message": "={{ $json.body }}", "options": {}}),
+
+    node("ac555c24-dbb7-4a8c-ab6c-f4141f105612", "Mark PROCESSING", "n8n-nodes-base.googleSheets", 4.5, [1780, 300],
          {"resource": "sheet", "operation": "update",
           "documentId": {"__rl": True, "value": "={{ $env.GSHEET_ID }}", "mode": "id"},
           "sheetName": {"__rl": True, "value": "Orders", "mode": "name"},
           "columns": {"mappingMode": "defineBelow", "matchingColumns": ["OrderID"],
                        "value": {"OrderID": "={{ $('New Order Trigger').item.json.OrderID }}",
                                   "Status": "PROCESSING",
-                                  "PaymentStatus": "PENDING",
-                                  "PaymentLink": "={{ ($('Create Payment Link').item.json || {}).redirectUrl || '' }}"}},
+                                  "PaymentStatus": "={{ $('Prepare Payment').item.json.paymentStatus }}",
+                                  "PaymentRef": "={{ $('Prepare Payment').item.json.paymentRef }}"}},
           "options": {}}),
 
     node("ad4fea4e-edb0-41ef-ac3a-c27c22d135e2", "Flag: SKU not found",
@@ -618,13 +722,22 @@ w3_connections = {
         [{"node": "Update Stock", "type": "main", "index": 0}],
         [{"node": "Flag: SKU not found", "type": "main", "index": 0}],
     ]},
-    "Update Stock": {"main": [[{"node": "Create Payment Link", "type": "main", "index": 0}]]},
-    "Create Payment Link": {"main": [[{"node": "Build Owner Email", "type": "main", "index": 0}]]},
+    "Update Stock": {"main": [[{"node": "Prepare Payment", "type": "main", "index": 0}]]},
+    "Prepare Payment": {"main": [[{"node": "Payment Method?", "type": "main", "index": 0}]]},
+    "Payment Method?": {"main": [
+        [{"node": "M-Pesa Get Token", "type": "main", "index": 0}],          # output 0: mpesa
+        [{"node": "Airtel Get Token", "type": "main", "index": 0}],          # output 1: airtel
+        [{"node": "WhatsApp Confirm to Customer", "type": "main", "index": 0}],  # fallback: bank
+    ]},
+    "M-Pesa Get Token": {"main": [[{"node": "M-Pesa STK Push", "type": "main", "index": 0}]]},
+    "M-Pesa STK Push": {"main": [[{"node": "WhatsApp Confirm to Customer", "type": "main", "index": 0}]]},
+    "Airtel Get Token": {"main": [[{"node": "Airtel Request Payment", "type": "main", "index": 0}]]},
+    "Airtel Request Payment": {"main": [[{"node": "WhatsApp Confirm to Customer", "type": "main", "index": 0}]]},
+    "WhatsApp Confirm to Customer": {"main": [[{"node": "Build Owner Email", "type": "main", "index": 0}]]},
     "Build Owner Email": {"main": [[
         {"node": "Email Owner", "type": "main", "index": 0},
-        {"node": "WhatsApp Confirm to Customer", "type": "main", "index": 0},
+        {"node": "Mark PROCESSING", "type": "main", "index": 0},
     ]]},
-    "WhatsApp Confirm to Customer": {"main": [[{"node": "Mark PROCESSING", "type": "main", "index": 0}]]},
 }
 
 write("3-order-fulfilment.json", wf("Boutique — 3. Order Fulfilment", w3_nodes, w3_connections))
