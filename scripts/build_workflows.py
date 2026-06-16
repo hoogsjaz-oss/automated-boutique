@@ -384,6 +384,7 @@ return [{
     Status: 'NEW',
     FulfilmentNotes: 'Delivery area: ' + (o.delivery_area || ''),
     PaymentStatus: 'UNPAID',
+    PaymentLink: '',
   },
 }];
 """.strip()
@@ -502,10 +503,13 @@ return [{
 """.strip()
 
 owner_notice_js = r"""
-// Composes the owner notification (email body) for a new paid/new order.
-const d = $json;
-const o = d.order || {};
-const subject = `🛍️ New order ${o.OrderID || ''} — ${d.productName || o.ProductName || ''}`;
+// Composes the owner notification (email body) for a new order, including the
+// payment link. Reads the computed stock + the order row + the Yoco link via
+// direct node references so it doesn't depend on which node feeds it.
+const d = $('Compute New Stock').item.json;
+const o = $('New Order Trigger').item.json;
+const link = ($('Create Payment Link').item.json || {}).redirectUrl || '';
+const subject = `🛍️ New order ${o.OrderID || ''} — ${o.ProductName || d.productName || ''}`;
 const lines = [
   `New order received:`,
   ``,
@@ -514,10 +518,11 @@ const lines = [
   `Item: ${o.ProductName || d.productName} | Size ${o.Size || ''} | ${o.Colour || ''} | Qty ${o.Qty || 1}`,
   `Total: ${o.Currency || 'ZAR'} ${o.TotalPrice || ''}`,
   `Delivery: ${o.FulfilmentNotes || ''}`,
+  `Payment link: ${link || '(not generated)'}`,
   ``,
   `Stock now: ${d.newStock}${d.lowStock ? '  ⚠️ LOW STOCK' : ''}`,
 ];
-return [{ json: { subject, body: lines.join('\n'), to: $env.OWNER_EMAIL } }];
+return [{ json: { subject, body: lines.join('\n'), to: $env.OWNER_EMAIL, paymentLink: link } }];
 """.strip()
 
 w3_nodes = [
@@ -551,33 +556,48 @@ w3_nodes = [
                        "value": {"SKU": "={{ $json.sku }}", "Stock": "={{ $json.newStock }}"}},
           "options": {}}),
 
-    code("8cd4ef35-7430-48f5-9d9d-f31f9d82cf1c", "Build Owner Email", [440, 200], owner_notice_js),
+    # ---- Create a hosted payment link (Yoco Checkout API, ZAR) ----
+    # Swap this single node for Stripe/PayFast if you prefer (see docs/07).
+    http("7d01cf13-a73c-4529-8b11-78ea0577227f", "Create Payment Link", [440, 200],
+         "POST", "https://payments.yoco.com/api/checkouts",
+         [("Authorization", "=Bearer {{ $env.YOCO_SECRET_KEY }}"),
+          ("Content-Type", "application/json")],
+         json_body="={{ JSON.stringify({"
+                   " amount: Math.round((Number($('New Order Trigger').item.json.TotalPrice) || 0) * 100),"
+                   " currency: ($('New Order Trigger').item.json.Currency || 'ZAR'),"
+                   " metadata: { orderId: ($('New Order Trigger').item.json.OrderID || ''),"
+                   " sku: ($('New Order Trigger').item.json.SKU || '') } }) }}"),
+
+    code("8cd4ef35-7430-48f5-9d9d-f31f9d82cf1c", "Build Owner Email", [660, 200], owner_notice_js),
 
     node("6452c481-394d-4d96-bae7-24a1ff8915c8", "Email Owner",
-         "n8n-nodes-base.gmail", 2.1, [660, 120],
+         "n8n-nodes-base.gmail", 2.1, [880, 120],
          {"resource": "message", "operation": "send",
           "sendTo": "={{ $json.to }}", "subject": "={{ $json.subject }}",
           "emailType": "text", "message": "={{ $json.body }}", "options": {}}),
 
-    http("4151bfef-627e-4a72-9201-09c80fa2c2a7", "WhatsApp Confirm to Customer", [660, 280],
+    http("4151bfef-627e-4a72-9201-09c80fa2c2a7", "WhatsApp Confirm to Customer", [880, 300],
          "POST", "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
          [("Authorization", "=Bearer {{ $env.WHATSAPP_TOKEN }}"),
           ("Content-Type", "application/json")],
          json_body="={{ JSON.stringify({ messaging_product: 'whatsapp',"
                    " to: $('New Order Trigger').item.json.Phone.replace(/[^0-9]/g,''),"
                    " type: 'text', text: { body: 'Thank you for your order ' +"
-                   " ($('New Order Trigger').item.json.OrderID || '') + '! 🎉 We are preparing it"
-                   " and will share payment + delivery details shortly. — ' +"
-                   " ($env.BOUTIQUE_NAME || 'Our Boutique') } }) }}"),
+                   " ($('New Order Trigger').item.json.OrderID || '') + '! 🎉 Total: ' +"
+                   " ($('New Order Trigger').item.json.Currency || 'ZAR') + ' ' +"
+                   " ($('New Order Trigger').item.json.TotalPrice || '') +"
+                   " '. Pay securely here: ' + (($('Create Payment Link').item.json || {}).redirectUrl || '') +"
+                   " ' — ' + ($env.BOUTIQUE_NAME || 'Our Boutique') } }) }}"),
 
-    node("ac555c24-dbb7-4a8c-ab6c-f4141f105612", "Mark PROCESSING",
-         "n8n-nodes-base.googleSheets", 4.5, [880, 280],
+    node("ac555c24-dbb7-4a8c-ab6c-f4141f105612", "Mark PROCESSING", "n8n-nodes-base.googleSheets", 4.5, [1100, 300],
          {"resource": "sheet", "operation": "update",
           "documentId": {"__rl": True, "value": "={{ $env.GSHEET_ID }}", "mode": "id"},
           "sheetName": {"__rl": True, "value": "Orders", "mode": "name"},
           "columns": {"mappingMode": "defineBelow", "matchingColumns": ["OrderID"],
                        "value": {"OrderID": "={{ $('New Order Trigger').item.json.OrderID }}",
-                                  "Status": "PROCESSING"}},
+                                  "Status": "PROCESSING",
+                                  "PaymentStatus": "PENDING",
+                                  "PaymentLink": "={{ ($('Create Payment Link').item.json || {}).redirectUrl || '' }}"}},
           "options": {}}),
 
     node("ad4fea4e-edb0-41ef-ac3a-c27c22d135e2", "Flag: SKU not found",
@@ -598,7 +618,8 @@ w3_connections = {
         [{"node": "Update Stock", "type": "main", "index": 0}],
         [{"node": "Flag: SKU not found", "type": "main", "index": 0}],
     ]},
-    "Update Stock": {"main": [[{"node": "Build Owner Email", "type": "main", "index": 0}]]},
+    "Update Stock": {"main": [[{"node": "Create Payment Link", "type": "main", "index": 0}]]},
+    "Create Payment Link": {"main": [[{"node": "Build Owner Email", "type": "main", "index": 0}]]},
     "Build Owner Email": {"main": [[
         {"node": "Email Owner", "type": "main", "index": 0},
         {"node": "WhatsApp Confirm to Customer", "type": "main", "index": 0},

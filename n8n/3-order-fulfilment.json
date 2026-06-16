@@ -138,14 +138,45 @@
     },
     {
       "parameters": {
-        "jsCode": "// Composes the owner notification (email body) for a new paid/new order.\nconst d = $json;\nconst o = d.order || {};\nconst subject = `\ud83d\udecd\ufe0f New order ${o.OrderID || ''} \u2014 ${d.productName || o.ProductName || ''}`;\nconst lines = [\n  `New order received:`,\n  ``,\n  `Order: ${o.OrderID || ''}`,\n  `Customer: ${o.CustomerName || ''} (${o.Phone || ''})`,\n  `Item: ${o.ProductName || d.productName} | Size ${o.Size || ''} | ${o.Colour || ''} | Qty ${o.Qty || 1}`,\n  `Total: ${o.Currency || 'ZAR'} ${o.TotalPrice || ''}`,\n  `Delivery: ${o.FulfilmentNotes || ''}`,\n  ``,\n  `Stock now: ${d.newStock}${d.lowStock ? '  \u26a0\ufe0f LOW STOCK' : ''}`,\n];\nreturn [{ json: { subject, body: lines.join('\\n'), to: $env.OWNER_EMAIL } }];"
+        "method": "POST",
+        "url": "https://payments.yoco.com/api/checkouts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.YOCO_SECRET_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ amount: Math.round((Number($('New Order Trigger').item.json.TotalPrice) || 0) * 100), currency: ($('New Order Trigger').item.json.Currency || 'ZAR'), metadata: { orderId: ($('New Order Trigger').item.json.OrderID || ''), sku: ($('New Order Trigger').item.json.SKU || '') } }) }}"
+      },
+      "id": "7d01cf13-a73c-4529-8b11-78ea0577227f",
+      "name": "Create Payment Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Composes the owner notification (email body) for a new order, including the\n// payment link. Reads the computed stock + the order row + the Yoco link via\n// direct node references so it doesn't depend on which node feeds it.\nconst d = $('Compute New Stock').item.json;\nconst o = $('New Order Trigger').item.json;\nconst link = ($('Create Payment Link').item.json || {}).redirectUrl || '';\nconst subject = `\ud83d\udecd\ufe0f New order ${o.OrderID || ''} \u2014 ${o.ProductName || d.productName || ''}`;\nconst lines = [\n  `New order received:`,\n  ``,\n  `Order: ${o.OrderID || ''}`,\n  `Customer: ${o.CustomerName || ''} (${o.Phone || ''})`,\n  `Item: ${o.ProductName || d.productName} | Size ${o.Size || ''} | ${o.Colour || ''} | Qty ${o.Qty || 1}`,\n  `Total: ${o.Currency || 'ZAR'} ${o.TotalPrice || ''}`,\n  `Delivery: ${o.FulfilmentNotes || ''}`,\n  `Payment link: ${link || '(not generated)'}`,\n  ``,\n  `Stock now: ${d.newStock}${d.lowStock ? '  \u26a0\ufe0f LOW STOCK' : ''}`,\n];\nreturn [{ json: { subject, body: lines.join('\\n'), to: $env.OWNER_EMAIL, paymentLink: link } }];"
       },
       "id": "8cd4ef35-7430-48f5-9d9d-f31f9d82cf1c",
       "name": "Build Owner Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
+        660,
         200
       ]
     },
@@ -164,7 +195,7 @@
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
       "position": [
-        660,
+        880,
         120
       ]
     },
@@ -188,15 +219,15 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $('New Order Trigger').item.json.Phone.replace(/[^0-9]/g,''), type: 'text', text: { body: 'Thank you for your order ' + ($('New Order Trigger').item.json.OrderID || '') + '! \ud83c\udf89 We are preparing it and will share payment + delivery details shortly. \u2014 ' + ($env.BOUTIQUE_NAME || 'Our Boutique') } }) }}"
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $('New Order Trigger').item.json.Phone.replace(/[^0-9]/g,''), type: 'text', text: { body: 'Thank you for your order ' + ($('New Order Trigger').item.json.OrderID || '') + '! \ud83c\udf89 Total: ' + ($('New Order Trigger').item.json.Currency || 'ZAR') + ' ' + ($('New Order Trigger').item.json.TotalPrice || '') + '. Pay securely here: ' + (($('Create Payment Link').item.json || {}).redirectUrl || '') + ' \u2014 ' + ($env.BOUTIQUE_NAME || 'Our Boutique') } }) }}"
       },
       "id": "4151bfef-627e-4a72-9201-09c80fa2c2a7",
       "name": "WhatsApp Confirm to Customer",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
-        280
+        880,
+        300
       ]
     },
     {
@@ -220,7 +251,9 @@
           ],
           "value": {
             "OrderID": "={{ $('New Order Trigger').item.json.OrderID }}",
-            "Status": "PROCESSING"
+            "Status": "PROCESSING",
+            "PaymentStatus": "PENDING",
+            "PaymentLink": "={{ ($('Create Payment Link').item.json || {}).redirectUrl || '' }}"
           }
         },
         "options": {}
@@ -230,8 +263,8 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        880,
-        280
+        1100,
+        300
       ]
     },
     {
@@ -307,6 +340,17 @@
       ]
     },
     "Update Stock": {
+      "main": [
+        [
+          {
+            "node": "Create Payment Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Payment Link": {
       "main": [
         [
           {

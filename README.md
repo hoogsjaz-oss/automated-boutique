@@ -8,8 +8,9 @@ Automate your online boutique end-to-end with **n8n** + a **Google Sheet** +
 2. **💬 Smart customer replies** — Claude reads incoming WhatsApp messages and
    answers questions about **price, sizes, colours, and stock** from your live
    catalog, and captures orders.
-3. **📦 Order fulfilment** — confirmed orders update stock, notify you, send the
-   customer a confirmation, and move the order through statuses.
+3. **📦 Order fulfilment + payment** — confirmed orders update stock, generate a
+   **Yoco payment link**, send the customer a WhatsApp confirmation with the link,
+   notify you, and move the order through statuses.
 
 You edit one Google Sheet each week. Everything else runs itself.
 
@@ -31,8 +32,8 @@ You edit one Google Sheet each week. Everything else runs itself.
 │                 │      │                     │      │                   │
 │ cron → read     │      │ WhatsApp webhook →  │      │ new Orders row →  │
 │ today's items → │      │ Claude (catalog) →  │      │ decrement stock → │
-│ post to:        │      │ reply on WhatsApp → │      │ email you +       │
-│ WA·IG·FB·TikTok │      │ capture order       │      │ confirm customer  │
+│ post to:        │      │ reply on WhatsApp → │      │ Yoco pay link →   │
+│ WA·IG·FB·TikTok │      │ capture order       │      │ confirm + email   │
 └─────────────────┘      └─────────────────────┘      └───────────────────┘
 ```
 
@@ -47,7 +48,7 @@ credentials, and switch them on.
 |------|------------|
 | [`n8n/1-weekly-scheduler.json`](n8n/1-weekly-scheduler.json) | Weekly multi-platform poster |
 | [`n8n/2-customer-reply-bot.json`](n8n/2-customer-reply-bot.json) | WhatsApp → Claude → reply + order capture |
-| [`n8n/3-order-fulfilment.json`](n8n/3-order-fulfilment.json) | Stock update + notifications |
+| [`n8n/3-order-fulfilment.json`](n8n/3-order-fulfilment.json) | Stock update + Yoco payment link + notifications |
 | [`google-sheet/`](google-sheet/) | CSV templates for the `Products`, `Orders`, `Subscribers` tabs |
 | [`prompts/`](prompts/) | The Claude system prompt used by the reply bot |
 | [`docs/`](docs/) | Step-by-step setup for the sheet, each platform, Claude and n8n |
@@ -66,6 +67,7 @@ Follow the docs in order — each is short and self-contained:
 4. **[Instagram + Facebook setup](docs/03-instagram-facebook-setup.md)** — Meta Graph token, Page & IG IDs.
 5. **[TikTok setup](docs/04-tiktok-setup.md)** — Content Posting API access.
 6. **[Claude setup](docs/05-claude-api-setup.md)** — Anthropic API key + model choice.
+7. **[Payment setup](docs/07-payment-setup.md)** — Yoco key for the order pay link (or swap to Stripe/PayFast).
 
 Then in n8n: open each workflow, attach the Google credential, and toggle it
 **Active**. Add a row to `Products` with today's weekday in `PostDay` and run
@@ -83,7 +85,7 @@ ImageURL, PostDay, Active, Category, LastPostedAt`
 
 **Orders** — auto-filled by the bot/fulfilment: `OrderID, Timestamp,
 CustomerName, Phone, SKU, ProductName, Size, Colour, Qty, UnitPrice,
-TotalPrice, Currency, Status, FulfilmentNotes, PaymentStatus`
+TotalPrice, Currency, Status, FulfilmentNotes, PaymentStatus, PaymentLink`
 
 **Subscribers** — opted-in WhatsApp customers for broadcasts: `Name, Phone,
 OptInStatus, OptInDate, Tags`
