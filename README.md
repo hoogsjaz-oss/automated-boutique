@@ -53,9 +53,24 @@ credentials, and switch them on.
 | [`prompts/`](prompts/) | The Claude system prompt used by the reply bot |
 | [`docs/`](docs/) | Step-by-step setup for the sheet, each platform, Claude and n8n |
 | [`.env.example`](.env.example) | All the environment variables/secrets n8n needs |
+| [`docker-compose.yml`](docker-compose.yml) | Runs n8n locally (mounts workflows for import) |
+| [`scripts/run-local.sh`](scripts/run-local.sh) | One-command local launcher |
 | [`scripts/build_workflows.py`](scripts/build_workflows.py) | Regenerates the workflow JSON (edit logic here) |
 
 ---
+
+## Run it locally (Docker, one command)
+
+```bash
+git clone https://github.com/hoogsjaz-oss/automated-boutique.git
+cd automated-boutique
+./scripts/run-local.sh        # starts n8n + imports the workflows
+```
+
+Then open **<http://localhost:5678>**, create your account, add your Google +
+keys, and toggle the workflows Active. Full walkthrough (including testing with
+just an Anthropic key, and exposing the WhatsApp webhook via a tunnel):
+**[docs/RUN-LOCALLY.md](docs/RUN-LOCALLY.md)**.
 
 ## Quick start (≈ 1–2 hrs the first time)
 
